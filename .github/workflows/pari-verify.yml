@@ -2,8 +2,10 @@ name: pari-verify-c2
 
 # Independent second route for c2(5) of E34 (Mission E34-kappa5, REPAIR-C2).
 # PARI overconvergent modular symbols; shares no code with the Sage/eclib route.
-# HARD GATE: the E34 job runs only if the E56 control job reproduces the
-# archive digits (checked in the gate step of the control job).
+# v3 scripts (farm-fixed): basis-robust, fail-fast, Gauss-factor and c_inf
+# conventions corrected. Gate rule per FIX-NOTES.md section 4: the gp binary
+# exits 0 even on failure — MARKERS are the gate, plus zero "***" lines.
+# HARD GATE: the E34 job runs only if the control job passes every marker.
 
 on:
   workflow_dispatch:
@@ -22,19 +24,25 @@ jobs:
       - name: Run E56 control (N=12544)
         shell: bash
         run: |
-          set -o pipefail
-          gp -q -s 12000000000 --default parisizemax=14000000000 pari-verify/pari_control.gp 2>&1 | tee control.log
-      - name: Gate — control must reproduce archive digits
+          gp -q -s 12000000000 --default parisizemax=14000000000 pari-verify/pari_control.gp > control.log 2>&1 || true
+          cat control.log
+      - name: Gate — markers, digit thresholds, zero error lines
         shell: bash
         run: |
           set -e
+          if grep -q '\*\*\*' control.log; then echo "FAIL: GP error lines present"; exit 1; fi
           grep -q "CONTROL DONE" control.log
+          grep -q "STAGE eigensymbol OK" control.log
+          grep -q "STAGE normalisation OK" control.log
+          grep -q "STAGE oms OK" control.log
+          grep -q "eigenvector primes genuinely checked:" control.log
           grep -q "eigenvector failures at primes <= 50 not dividing N: 0" control.log
           grep -q "lambda agreement (exact rational equality): 1" control.log
           grep -q "EXACTLY equal: 1" control.log
-          v=$(grep "v5(c2 - (1+4\*5+3\*5^2+5^3))" control.log | sed 's/.*= \([0-9]*\).*/\1/')
-          echo "control v5(c2 - target5) = $v (need >= 5)"
-          [ "$v" -ge 5 ]
+          v5a=$(grep "v5(c2 - (1+4\*5+3\*5^2+5^3))" control.log | head -1 | sed 's/.*= \([0-9]*\).*/\1/')
+          v5b=$(grep "v5(c2 - 18971)" control.log | head -1 | sed 's/.*= \([0-9]*\).*/\1/')
+          echo "control gates: v5(c2-target5) = $v5a (need >= 5); v5(c2-18971) = $v5b (need >= 8)"
+          [ "$v5a" -ge 5 ] && [ "$v5b" -ge 8 ]
           echo "CONTROL GATE PASSED"
       - name: Upload control log
         if: always()
@@ -57,18 +65,21 @@ jobs:
       - name: Run E34 (N=18496)
         shell: bash
         run: |
-          set -o pipefail
-          gp -q -s 12000000000 --default parisizemax=14000000000 pari-verify/pari_e34.gp 2>&1 | tee e34.log
-      - name: Report — digit test against the claim
+          gp -q -s 12000000000 --default parisizemax=14000000000 pari-verify/pari_e34.gp > e34.log 2>&1 || true
+          cat e34.log
+      - name: Report — execution validity, then the digit verdict
         if: always()
         shell: bash
         run: |
-          grep -q "E34 DONE" e34.log || { echo "E34 script did not complete"; exit 1; }
-          grep "v5(c2 - claim43338)" e34.log || true
-          grep "v5(q5 - 1)" e34.log || true
-          v=$(grep "v5(c2 - claim43338)" e34.log | sed 's/.*= \([0-9]*\).*/\1/')
+          if grep -q '\*\*\*' e34.log; then echo "EXECUTION INVALID: GP error lines present"; exit 1; fi
+          grep -q "E34 DONE" e34.log || { echo "EXECUTION INCOMPLETE: no E34 DONE marker"; exit 1; }
+          grep -q "STAGE eigensymbol OK" e34.log
+          grep -q "STAGE normalisation OK" e34.log
+          grep -q "STAGE oms OK" e34.log
+          v=$(grep "v5(c2 - claim43338)" e34.log | head -1 | sed 's/.*= \([0-9]*\).*/\1/')
           echo "v5(c2 - 43338) = $v (>=7 iff agreement with the Sage claim mod 5^7)"
-          [ "$v" -ge 7 ] && echo "E34 AGREES with c2(5) = 43338 mod 5^7" || echo "E34 DISAGREES or precision short — see log"
+          grep "v5(q5 - 1)" e34.log || true
+          if [ "$v" -ge 7 ]; then echo "VERDICT: E34 AGREES — c2(5) = 43338 mod 5^7 confirmed by the PARI route"; else echo "VERDICT: E34 DISAGREES or precision short — see log and DIAGNOSTIC line"; fi
       - name: Upload E34 log
         if: always()
         uses: actions/upload-artifact@v4
