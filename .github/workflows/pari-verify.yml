@@ -1,0 +1,77 @@
+name: pari-verify-c2
+
+# Independent second route for c2(5) of E34 (Mission E34-kappa5, REPAIR-C2).
+# PARI overconvergent modular symbols; shares no code with the Sage/eclib route.
+# HARD GATE: the E34 job runs only if the E56 control job reproduces the
+# archive digits (checked in the gate step of the control job).
+
+on:
+  workflow_dispatch:
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PARI/GP
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pari-gp
+          gp --version
+      - name: Run E56 control (N=12544)
+        shell: bash
+        run: |
+          set -o pipefail
+          gp -q -s 12000000000 --default parisizemax=14000000000 pari-verify/pari_control.gp 2>&1 | tee control.log
+      - name: Gate — control must reproduce archive digits
+        shell: bash
+        run: |
+          set -e
+          grep -q "CONTROL DONE" control.log
+          grep -q "eigenvector failures at primes <= 50 not dividing N: 0" control.log
+          grep -q "lambda agreement (exact rational equality): 1" control.log
+          grep -q "EXACTLY equal: 1" control.log
+          v=$(grep "v5(c2 - (1+4\*5+3\*5^2+5^3))" control.log | sed 's/.*= \([0-9]*\).*/\1/')
+          echo "control v5(c2 - target5) = $v (need >= 5)"
+          [ "$v" -ge 5 ]
+          echo "CONTROL GATE PASSED"
+      - name: Upload control log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pari-control-log
+          path: control.log
+
+  e34:
+    needs: control
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PARI/GP
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pari-gp
+          gp --version
+      - name: Run E34 (N=18496)
+        shell: bash
+        run: |
+          set -o pipefail
+          gp -q -s 12000000000 --default parisizemax=14000000000 pari-verify/pari_e34.gp 2>&1 | tee e34.log
+      - name: Report — digit test against the claim
+        if: always()
+        shell: bash
+        run: |
+          grep -q "E34 DONE" e34.log || { echo "E34 script did not complete"; exit 1; }
+          grep "v5(c2 - claim43338)" e34.log || true
+          grep "v5(q5 - 1)" e34.log || true
+          v=$(grep "v5(c2 - claim43338)" e34.log | sed 's/.*= \([0-9]*\).*/\1/')
+          echo "v5(c2 - 43338) = $v (>=7 iff agreement with the Sage claim mod 5^7)"
+          [ "$v" -ge 7 ] && echo "E34 AGREES with c2(5) = 43338 mod 5^7" || echo "E34 DISAGREES or precision short — see log"
+      - name: Upload E34 log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pari-e34-log
+          path: e34.log
