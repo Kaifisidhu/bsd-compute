@@ -1,0 +1,65 @@
+name: bsd-compute
+
+# Free compute farm for the BSD campaign. Public repo => GitHub Actions
+# minutes are free. Manual dispatch only; nothing runs on push.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Job to run"
+        type: choice
+        options:
+          - proof
+          - batch
+        default: proof
+
+jobs:
+  compute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Measure the runner (from inside the job)
+        run: |
+          {
+            echo "## Runner (measured inside the job)"
+            echo "- nproc: $(nproc)"
+            echo "- CPU: $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | xargs)"
+            echo "- RAM: $(free -h | awk '/^Mem:/{print $2" total, "$7" available"}')"
+            echo "- Disk: $(df -h / | awk 'NR==2{print $2" total, "$4" free"}')"
+            echo "- Kernel: $(uname -r)"
+            echo "- Date (UTC): $(date -u +%FT%TZ)"
+          } | tee runner.txt
+          cat runner.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install PARI/gp + Python cypari2
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pari-gp > /dev/null
+          python3 -m pip install --quiet cypari2
+          gp --version | head -1
+          python3 -c "import cypari2; print('cypari2 import OK')"
+
+      - name: Proof of life — E_34
+        if: inputs.mode == 'proof'
+        run: |
+          mkdir -p out
+          { time gp -q scripts/proof_e34.gp ; } 2>&1 | tee out/proof_e34.txt
+          { echo "## Proof of life — E_34"; echo '```'; cat out/proof_e34.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Batch payload — a_p tables + analytic Sha (20 certified curves)
+        if: inputs.mode == 'batch'
+        run: |
+          mkdir -p out
+          python3 scripts/batch.py curves.json out/batch_results.json | tee out/batch_log.txt
+          { echo "## Batch results"; echo '```'; cat out/batch_log.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bsd-compute-${{ inputs.mode }}-${{ github.run_number }}
+          path: |
+            runner.txt
+            out/
+          retention-days: 30
